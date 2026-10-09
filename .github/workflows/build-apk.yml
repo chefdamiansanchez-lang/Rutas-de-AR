@@ -1,0 +1,83 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Ubicar archivos del proyecto
+        run: |
+          if [ ! -f package.json ]; then
+            ZIP=$(find . -maxdepth 2 -name "*.zip" | head -1)
+            if [ -n "$ZIP" ]; then unzip -o "$ZIP" -d /tmp/proy && cp -a /tmp/proy/. .; fi
+          fi
+          if [ ! -f package.json ]; then
+            D=$(dirname "$(find . -name package.json -not -path "*/node_modules/*" | head -1)")
+            cp -a "$D"/. .
+          fi
+          ls -la
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Copiar Leaflet a la app
+        run: |
+          mkdir -p www/lib
+          cp node_modules/leaflet/dist/leaflet.js www/lib/
+          cp node_modules/leaflet/dist/leaflet.css www/lib/
+          cp -r node_modules/leaflet/dist/images www/lib/
+
+      - name: Crear proyecto Android
+        run: npx cap add android
+
+      - name: Generar ícono de la app
+        continue-on-error: true
+        run: npx @capacitor/assets generate --android --iconBackgroundColor '#1b2028' --iconBackgroundColorDark '#1b2028'
+
+      - name: Agregar permisos de ubicación
+        run: |
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />#' android/app/src/main/AndroidManifest.xml
+          grep -n "uses-permission" android/app/src/main/AndroidManifest.xml
+
+      - name: Sincronizar web con Android
+        run: npx cap sync android
+
+      - name: Compilar APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Guardar APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: RutasArgentinas-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publicar APK para descargar desde el móvil
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.${{ github.run_number }}
+          name: Rutas Argentinas v1.${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
